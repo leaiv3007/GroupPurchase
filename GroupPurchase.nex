@@ -1,0 +1,125 @@
+pragma nexscript ^1.0.2;
+
+contract GroupPurchase(
+    pubkey vendorPk,              // Seller's public key
+    int minPrice,                 // Minimum price for the product
+    int priceDecreasePerSale,     // Amount by which the price decreases with each new participant
+    int minimumParticipants,      // Minimum number of participants required to finalize the purchase
+    int visible totalParticipants, // Number of participants (starts at 0)
+    bool visible purchaseCompleted // Status of the purchase (completed or not)
+) {
+    // Function: participate in the group purchase
+    function participate(pubkey participantPk, sig participantSig) {
+        // Ensure that the purchase is not yet completed
+        require(!purchaseCompleted); 
+
+        // Verify the participant's signature
+        require(checkSig(participantSig, participantPk));
+
+        // Calculate the number of participants
+        int participantCount = totalParticipants + 1;
+
+        // Calculate the current price based on the number of participants
+        int currentPrice = minPrice + priceDecreasePerSale * (minimumParticipants - participantCount);
+
+        // Ensure the price does not drop below the minimum price
+        if (currentPrice < minPrice) {
+            currentPrice = minPrice;
+        }
+
+        // Check if the participant's payment is sufficient
+        require(tx.inputs[this.activeInputIndex].value >= currentPrice);
+
+        // If the participant overpaid, refund the excess amount
+        if (tx.inputs[this.activeInputIndex].value > currentPrice) {
+            bytes20 participantHash = hash160(participantPk);  // Convert participant's public key to bytes20
+            bytes recipientLockingBytecode = new LockingBytecodeP2PKT(participantHash);
+            
+            // Ensure the refund is returned to the participant
+            require(tx.outputs[1].lockingBytecode == recipientLockingBytecode);
+            
+            // Calculate and return the excess payment
+            require(tx.outputs[1].value == (tx.inputs[this.activeInputIndex].value - currentPrice)); 
+        }
+
+        // Update the total number of participants
+        totalParticipants = participantCount;
+
+        // Final statement required for NexScript contracts
+        require(true);
+    }
+
+    // Function: finalize the purchase and transfer funds to the vendor
+    function finalizePurchase(sig vendorSig) {
+        // Ensure the purchase has not already been completed
+        require(!purchaseCompleted);
+
+        // Verify the vendor's signature
+        require(checkSig(vendorSig, vendorPk));
+
+        // Ensure that the required number of participants has been reached
+        int participantCount = totalParticipants;
+        require(participantCount >= minimumParticipants);
+
+        // Calculate the final price
+        int finalPrice = minPrice + priceDecreasePerSale * (minimumParticipants - participantCount);
+
+        // Ensure the final price does not drop below the minimum price
+        if (finalPrice < minPrice) {
+            finalPrice = minPrice;
+        }
+
+        // Ensure the total input value matches the total payment required
+        require(tx.amountIn == finalPrice * participantCount);
+
+        // Transfer the funds to the vendor
+        bytes20 vendorHash = hash160(vendorPk);  // Convert vendor's public key to bytes20
+        bytes vendorLockingBytecode = new LockingBytecodeP2PKT(vendorHash);
+        
+        // Ensure the correct amount is transferred to the vendor
+        require(tx.outputs[0].lockingBytecode == vendorLockingBytecode);
+        require(tx.outputs[0].value == finalPrice * participantCount);
+
+        // Mark the purchase as completed
+        purchaseCompleted = true;
+
+        // Final statement required for NexScript contracts
+        require(true);
+    }
+
+    // Function: allow a participant to get a refund if they overpaid
+    function refund(pubkey participantPk, sig participantSig) {
+        // Ensure the purchase has not been finalized yet
+        require(!purchaseCompleted);
+
+        // Verify the participant's signature
+        require(checkSig(participantSig, participantPk));
+
+        // Calculate the number of participants
+        int participantCount = totalParticipants;
+
+        // Calculate the final price
+        int finalPrice = minPrice + priceDecreasePerSale * (minimumParticipants - participantCount);
+
+        // Ensure the final price does not drop below the minimum price
+        if (finalPrice < minPrice) {
+            finalPrice = minPrice;
+        }
+
+        // Check how much the participant paid
+        int paidAmount = tx.inputs[this.activeInputIndex].value;
+
+        // If the participant overpaid, refund the excess amount
+        if (paidAmount > finalPrice) {
+            bytes20 participantHash = hash160(participantPk);  // Convert participant's public key to bytes20
+            bytes recipientLockingBytecode = new LockingBytecodeP2PKT(participantHash);
+            
+            // Ensure the refund is correctly sent to the participant
+            require(tx.outputs[1].lockingBytecode == recipientLockingBytecode);
+            require(tx.outputs[1].value == (paidAmount - finalPrice)); // Refund the excess payment
+        }
+
+        // Final statement required for NexScript contracts
+        require(true);
+    }
+}
